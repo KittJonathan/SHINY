@@ -1,0 +1,198 @@
+---
+title: "Mastering Shiny - reading notes"
+format: html
+editor: visual
+---
+
+# 1. Your first Shiny app
+
+-   UI: user interface –\> how your app looks
+
+-   server function –\> how your app works
+
+-   reactive programming: automatically update outputs when inputs change
+
+```{r, eval=FALSE}
+install.packages("shiny")
+```
+
+```{r}
+packageVersion("shiny")
+library(shiny)
+```
+
+## Create app directory and file
+
+To create a Shiny app:
+
+-   create a new directory for the app, and put a single file called `app.R` in it.
+
+```{r, eval=FALSE}
+# Load the Shiny package
+library(shiny)
+
+# Define the User Interface
+ui <- fluidPage(
+  "Hello World!"
+)
+
+# Specify the app's behavior
+server <- function(input, output, session) {
+}
+
+# Construct and start the Shiny app from UI & server
+shinyApp(ui, server)
+```
+
+-   File \> New Project \> New Directory \> Shiny Web Application
+
+-   Create the `app.R` file, and in the file type "shinyapp" then Shift + Tab
+
+To run the app:
+
+-   Click the **Run App** button in the document toolbar
+
+-   `Ctrl + Shift + Enter`
+
+-   outside RStudio –\> `source()` the whole document, or call `shiny::runApp()` with the path to the directory containing `app.R`.
+
+In the console : `Listening on http://127.0.0.1:7316`
+
+-   `127.0.0.1` is a standard address meaning "this computer"
+
+-   `7316` is a random assigned port number
+
+Enter that URL into a web browser to open another copy of the app.
+
+To stop the app:
+
+-   click on the Stop sign icon on the R console toolbar
+
+-   click on the console, then press `Esc` (or press `Ctrl + C` is not using RStudio)
+
+-   close the Shiny app window
+
+If using RStudio, you don't need to stop and re-start the app when modifying it - press the Reload app button in the toolbok or use `Ctrl + Shift + Enter`.
+
+## Adding UI controls
+
+```{r, eval=FALSE}
+# layout function to set up the basic visual structure of the page
+ui <- fluidPage(
+  # input control, lets the user interact with the app by providing a value
+  selectInput("dataset", label = "Dataset",
+              choices = ls("package:datasets")),
+  # output control that displays code
+  verbatimTextOutput("summary"),
+  # output control that displays tables
+  tableOutput("table")
+)
+```
+
+## Adding behaviour
+
+Shiny uses reactive programming to make apps interactive.
+
+This involves telling Shiny how to perform a computation, not ordering Shiny to actually go do it. It's like the difference between giving someone a recipe versus demanding that they go make you a sandwich.
+
+```{r, eval=FALSE}
+server <- function(input, output, session) {
+  output$summary <- renderPrint({
+    dataset <- get(input$dataset, "package:datasets")
+    summary(dataset)
+  })
+  
+  output$table <- renderTable({
+    dataset <- get(input$dataset, "package:datasets")
+    dataset
+  })
+}
+```
+
+The left-hand side of the assignment operator (`<-`), `output$ID`, indicates that you're providing the recipe for the Shiny output with that ID. The right-hand side of the assignment uses a specific **render function** to wrap some code that you'll provide.
+
+Each `render{Type}` function is designed to produce a particular type of output (e.g. text, tables, and plots), and is often paired with a `{type}Output` function:
+
+-   `renderPrint()` \<-\> `verbatimTextOutput()`
+
+-   `renderTable()` \<-\> `tableOutput()`
+
+Summary and table change whenever you change the input dataset. This is the essence of reactivity: outputs automatically react (recalculate) when their inputs change.
+
+## Reducing duplication with reactive expressions
+
+One line of code is duplicated:
+
+```{r,eval=FALSE}
+dataset <- get(input$dataset, "package:datasets")
+```
+
+Two techniques to deal with duplicates:
+
+-   capture the value using a variable
+
+-   capture the computation with a function
+
+Here, these mechanisms don't work, and we need a new one: **reactive expressions**.
+
+-   wrap a block of code in `reactive({...})` and assign it to a variable
+
+-   a reactive expression is used by calling it like a function
+
+    -   big difference with a function: a reactive expression only runs the first time it is called and then it caches its result until it needs to be updated
+
+```{r, eval=FALSE}
+server <- function(input, output, session) {
+  # Create a reactive expression
+  dataset <- reactive({
+    get(input$dataset, "package:datasets")
+  })
+  
+  output$summary <- renderPrint({
+    # Use a reactive expression by calling it like a function
+    summary(dataset())
+  })
+  
+  output$table <- renderTable({
+    dataset()
+  })
+}
+```
+
+# 2. Basic UI
+
+## Inputs
+
+### Common structure
+
+All input functions have the same first argument: `inputId`. This is the identifier used to connect the front end with the back end: if you UI has an input with ID `"name"`, the server function will access it with `input$name`.
+
+The `inputId` has two constraints:
+
+-   it must be a simple string that contains only letters, numbers, and underscores (no spaces, dashes, periods, or other special characters allowed)
+
+-   it must be unique. If it's not unique, you'll have no way to refer to this control in your server function.
+
+Most input functions have a second parameter called `label`. This is used to create a human-readable label for the control. There are no restrictions on this label, but you'll need to carefully think about it to make sure that your app is usable by humans.
+
+The third parameter is typically `value`, which, where possible, lets you set the default value. The remaining parameters are unique to the control.
+
+When creating an input, it is recommended to supply the `inputId` and `label` arguments by position, and all other arguments by name:
+
+```{r, eval=FALSE}
+sliderInput("min", "Limit (minimum)", value = 50, min = 0, max = 100)
+```
+
+### Free text
+
+```{r, eval=FALSE}
+ui <- fluidPage(
+  textInput("name", "What's your name?"),
+  passwordInput("password", "What's your password?"),
+  textAreaInput("story", "Tell me about yourself", rows = 3)
+)
+```
+
+To ensure that the text has certain properties, you can use `validate()` (see in chapter 8).
+
+### Numeric inputs
