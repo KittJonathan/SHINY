@@ -2,6 +2,8 @@
 title: "Mastering Shiny - reading notes"
 format: html
 editor: visual
+execute: 
+  eval: false
 ---
 
 # 1. Your first Shiny app
@@ -428,3 +430,146 @@ Plots are outputs that can also act as inputs. `plotOutput()` has a number of ar
 ### Downloads
 
 You can let user download a file with `downloadButton()` or `downloadLink()`. These require new techniques in the server function.
+
+# 3. Basic reactivity
+
+## Introduction
+
+The key idea of reactive programming is to specify a graph of dependencies so that when an input changes, all related outputs are automatically updated.
+
+## The server function
+
+The guts of every Shiny app look like this:
+
+```{r, eval=FALSE}
+library(shiny)
+
+ui <- fluidPage(
+  # front end interface
+)
+
+server <- function(input, output, session) {
+  # back end logic 
+}
+
+shinyApp(ui, server)
+```
+
+The `ui` is simple because every user gets the same HTML.
+
+The `server` is more complicated because every user needs to get an independent version of the app; when user A moves a slides, user B shouldn't see their outputs change.
+
+To achieve this independence, Shiny invokes your `server()` function each time a new session starts. Just like any other R function, when the server function is called it creates a new local environment that is independent of every other invocation of the function. This allows each session to have a unique state, as well as isolating the variables created inside the function. This is why almost all of the reactive programming you'll do in Shiny will be inside the server function.
+
+### Input
+
+The `input` argument is a list-like object that contains all the input data sent from the browser, named according to the input ID.
+
+If the UI contains a numeric input control with an input ID of `count` :
+
+```{r, eval=FALSE}
+ui <- fluidPage(
+  numericInput("count", label = "Number of values", value = 100)
+)
+```
+
+then you access the value of that input with `input$count`. It will initially contain the value `100` and it will be automatically updated as the user changes the value in the browser.
+
+Unlike a typical list, `input` objects are read-only. If you attempt to modify an input inside the server function, you'll get an error :
+
+```{r, eval=FALSE}
+server <- function(input, output, session) {
+  input$count <- 10
+}
+
+shinyApp(ui, server)
+
+# Error in $<-: Can't modify read-only reactive value 'count'
+```
+
+`input` is selective about who is allowed to read it. To read from an `input`, you must be in a **reactive context** created by a function like `renderText()` or `reactive()`.
+
+```{r, eval=FALSE}
+server <- function(input, output, session) {
+  message("The value of input$count is ", input$count)
+}
+
+shinyApp(ui, server)
+
+# Error in input$count : 
+#   Can't access reactive value 'count' outside of reactive consumer.
+# ℹ Do you need to wrap inside reactive() or observe()?
+```
+
+### Output
+
+`output` is also a list-like object named according to the output ID. You use it for sending output instead of receiving input. You always use the `output` object in concert with a `render` function :
+
+```{r}
+ui <- fluidPage(
+  textOutput("greeting")
+)
+
+server <- function(input, output, session) {
+  output$greeting <- renderText("Hello human!")
+}
+```
+
+The ID is quoted in the UI, not in the server.
+
+The render function does two things :
+
+-   it sets up a special reactive context that automatically tracks what inputs the output uses.
+
+-   it converts the output of your R code into HTML suitable for display on a web page.
+
+You'll get errors if :
+
+-   you forget the `render` function
+
+```{r}
+server <- function(input, output, session) {
+  output$greeting <- "Hello human!"
+}
+
+shinyApp(ui, server)
+
+# Error in .subset2(x, "impl")$defineOutput(name, value, label) : 
+#   Unexpected character object for output$greeting
+# ℹ Did you forget to use a render function?
+```
+
+-   you attempt to read from an output
+
+```{r}
+server <- function(input, output, session) {
+  message("The greeting is ", output$greeting)
+}
+
+shinyApp(ui, server)
+
+# Error in output$greeting : Can't read output 'greeting'
+```
+
+## Reactive programming
+
+```{r}
+ui <- fluidPage(
+  textInput("name", "What's your name?"),
+  textOutput("greeting")
+)
+
+server <- function(input, output, session) {
+  output$greeting <- renderText({
+    paste0("Hello ", input$name, "!")
+  })
+}
+```
+
+When running the app, the greeting updates automatically as you type.
+
+In this model, we only issue the instruction once. But Shiny performs the action every time we update `input$name`.
+
+The code doesn't *tell* Shiny to create the string and send it to the browser, but instead, it informs Shiny *how it could* create the string if it needs to. It's up to Shiny when (and even if!) the code should be run.
+
+It's Shiny's responsibility to decide when code is executed, not yours. Think of your app as providing Shiny with recipes, not giving it commands.
