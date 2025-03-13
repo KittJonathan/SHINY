@@ -573,3 +573,165 @@ In this model, we only issue the instruction once. But Shiny performs the action
 The code doesn't *tell* Shiny to create the string and send it to the browser, but instead, it informs Shiny *how it could* create the string if it needs to. It's up to Shiny when (and even if!) the code should be run.
 
 It's Shiny's responsibility to decide when code is executed, not yours. Think of your app as providing Shiny with recipes, not giving it commands.
+
+### Imperative vs declarative programming
+
+-   In **imperative** programming, you issue a specific command and it's carried out immediately ("make me a sandwich").
+
+-   in **declarative** programming, you express higher-level goals or describe important constraints, and rely on someone else to decide how and/or when to translate that into action ("ensure there is a sandwich in the refrigerator whenever I look inside of it").
+
+### Laziness
+
+A Shiny app will only ever do the minimal amount of work needed to update the output controls that you can currently see.
+
+But this laziness comes with an important downside :
+
+```{r}
+server <- function(input, output, session) {
+  output$greting <- renderText({
+    paste0("Hello ", input$name, "!")
+  })
+}
+```
+
+This won't generate an error in Shiny, but it won't do what you want. The `greting` output doesn't exist, so the code inside `renderText()` will never be run.
+
+### The reactive graph
+
+To understand the order of execution in Shiny, you need to look at the **reactive graph**, which describes how inputs and outputs are connected.
+
+![](images/clipboard-411555344.png)
+
+This graph tells us that `greeting` will need to be recomputed whenever `name` is changed.
+
+`greeting` has a **reactive dependency** on `name`.
+
+### Reactive expressions
+
+Reactive expressions reduce duplication in the reactive code by introducing additional nodes into the reactive graph.
+
+```{r}
+server <- function(input, output, session) {
+  string <- reactive(paste0("Hello ", input$name, "!"))
+  output$greeting <- renderText(string())
+}
+```
+
+### Execution order
+
+```{r}
+server <- function(input, output, session) {
+  output$greeting <- renderText(string())
+  string <- reactive(paste0("Hello ", input$name, "!"))
+}
+```
+
+This can be confusing. Make sure that reactive expressions and outputs only refer to things defined above, not below.
+
+The order in which reactive code is run is determined only by the reactive graph, not by its layout in the server function.
+
+## Reactive expressions
+
+Reactive expressions are important because they give Shiny more information so that it can do less recomputation when inputs change, making apps more efficient, and they make it easier for humans to understand the app by simplifying the reactive graph.
+
+-   Like inputs, you can use the results of a reactive expression in an output
+
+-   Like outputs, reactive expressions depend on inputs and automatically know when they need updating
+
+**Producers** refer to reactive inputs and expressions.
+
+**Consumers** refer to reactive expressions and outputs.
+
+![](images/clipboard-3962968825.png)
+
+### The motivation
+
+To compare two simulated datasets with a plot and a hypothesis test :
+
+-   `freqpoly()` to visualise the two distributions with frequency polygons
+
+-   `t_test()` to run a t-test to compare means and summarise the results with a string
+
+```{r, eval=TRUE}
+library(ggplot2)
+
+freqpoly <- function(x1, x2, binwidth = 0.1, xlim = c(-3, 3)) {
+  df <- data.frame(
+    x = c(x1, x2),
+    g = c(rep("x1", length(x1)), rep("x2", length(x2)))
+  )
+  
+  ggplot(df, aes(x, colour = g)) +
+    geom_freqpoly(binwidth = binwidth, linewidth = 1) +
+    coord_cartesian(xlim = xlim)
+}
+
+t_test <- function(x1, x2) {
+  test <- t.test(x1, x2)
+  
+  # use sprintf to format t.test() results compactly
+  sprintf(
+    "p value: %0.3f\n[%0.2f, %0.2f]",
+    test$p.value, test$conf.int[1], test$conf.int[2]
+  )
+}
+```
+
+Use these functions to compare two variables :
+
+```{r, eval=TRUE}
+x1 <- rnorm(100, mean = 0, sd = 0.5)
+x2 <- rnorm(200, mean = 0.15, sd = 0.9)
+
+freqpoly(x1, x2)
+cat(t_test(x1, x2))
+```
+
+### The app
+
+```{r}
+ui <- fluidPage(
+  fluidRow(
+    column(
+      4, "Distribution 1",
+      numericInput("n1", label = "n", value = 1000, min = 1),
+      numericInput("mean1", label = "𝞵", value = 0, step = 0.1),
+      numericInput("sd1", label = "𝛔", value = 0.5, min = 0.1, step = 0.1)
+      ),
+    column(
+      4, "Distribution 2",
+      numericInput("n2", label = "n", value = 1000, min = 1),
+      numericInput("mean2", label = "𝞵", value = 0, step = 0.1),
+      numericInput("sd2", label = "𝛔", value = 0.5, min = 0.1, step = 0.1)
+      ),
+    column(
+      4, "Frequency polygon",
+      numericInput("binwidth", label = "Bin width",
+                   value = 0.1, step = 0.1),
+      sliderInput("range", label = "range", value = c(-3, 3),
+                  min = -5, max = 5)
+      
+    )
+  ),
+  fluidRow(
+    column(9, plotOutput("hist")),
+    column(3, verbatimTextOutput("ttest"))
+  )
+)
+
+server <- function(input, output, session) {
+  output$hist <- renderPlot({
+    x1 <- rnorm(input$n1, input$mean1, input$sd1)
+    x2 <- rnorm(input$n2, input$mean2, input$sd2)
+    
+    freqpoly(x1, x2, binwidth = input$binwidth, xlim = input$range)
+  }, res = 96)
+  
+  output$ttest <- renderText({
+        x1 <- rnorm(input$n1, input$mean1, input$sd1)
+    x2 <- rnorm(input$n2, input$mean2, input$sd2)
+    
+    t_test(x1, x2)
+  })
+}
+```
