@@ -728,10 +728,262 @@ server <- function(input, output, session) {
   }, res = 96)
   
   output$ttest <- renderText({
-        x1 <- rnorm(input$n1, input$mean1, input$sd1)
+    x1 <- rnorm(input$n1, input$mean1, input$sd1)
     x2 <- rnorm(input$n2, input$mean2, input$sd2)
     
     t_test(x1, x2)
   })
 }
 ```
+
+### The reactive graph
+
+Shiny only looks at the output as a whole, so it will update both `x1` and `x2` every time one of `n1`, `mean1`, `sd1`, `n2`, `mean2` or `sd2` changes.
+
+![](images/clipboard-2712026268.png)
+
+-   The app s hard to understand because there are so many connections
+
+-   The app is inefficient because it does more work than necessary
+
+### Simplifying the graph
+
+We refactor the existing code to pull out the repeated code into two new reactive expressions, `x1` and `x2` which simulate the data from the two distributions.
+
+```{r}
+server <- function(input, output, session) {
+  x1 <- reactive(rnorm(input$n1, input$mean1, input$sd1))
+  x2 <- reactive(rnorm(input$n2, input$mean2, input$sd2))
+  
+  output$hist <- renderPlot({
+    freqpoly(x1(), x2(), binwidth = input$binwidth, xlim = input$range)
+  }, res = 96)
+  
+  output$ttest <- renderText({
+    t_test(x1(), x2())
+  })
+}
+```
+
+![](images/clipboard-2737501863.png)
+
+Modules allow you to extract out repeated code for reuse, while guaranteeing that it's isolated from everything else in the app :
+
+![](images/clipboard-522185787.png)
+
+Whenever you copy and paste something once, you should consider extracting the repeated code out into a reactive expression.
+
+### Why do we need reactive expressions?
+
+While variables calculate the value only once, and functions calculate the values every time they're called, reactive expressions calculate the value only when it might have changed.
+
+```{r}
+server <- function(input, output, session) {
+  x1 <- rnorm(input$n1, input$mean1, input$sd1)
+  x2 <- rnorm(input$n2, input$mean2, input$sd2)
+  
+  output$hist <- renderPlot({
+    freqpoly(x1, x2, binwidth = input$binwidth, xlim = input$range)
+  }, res = 96)
+  
+  output$ttest <- renderText({
+    t_test(x1, x2)
+  })
+}
+
+# Error in input$n1 : 
+#   Can't access reactive value 'n1' outside of reactive consumer.
+# ℹ Do you need to wrap inside reactive() or observe()?
+```
+
+```{r}
+server <- function(input, output, session) {
+  x1 <- function() rnorm(input$n1, input$mean1, input$sd1)
+  x2 <- function() rnorm(input$n2, input$mean2, input$sd2)
+  
+  output$hist <- renderPlot({
+    freqpoly(x1(), x2(), binwidth = input$binwidth, xlim = input$range)
+  }, res = 96)
+  
+  output$ttest <- renderText({
+    t_test(x1(), x2())
+  })
+}
+```
+
+## Controlling the timing of evaluation
+
+```{r}
+ui <- fluidPage(
+  fluidRow(
+    column(
+      3,
+      numericInput("lambda1", label = "lambda1", value = 3),
+      numericInput("lambda2", label = "lambda2", value = 5),
+      numericInput("n", label = "n", value = 1e4, min = 0)
+    ),
+    column(
+      9,
+      plotOutput("hist")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  x1 <- reactive(rpois(input$n, input$lambda1))
+  x1 <- reactive(rpois(input$n, input$lambda2))
+  
+  output$hist <- renderPlot({
+    freqpoly(x1(), x2(), binwidth = 1, xlim = c(0, 40))
+  }, res = 96)
+}
+```
+
+![](images/clipboard-1173696236.png)
+
+### Timed invalidation
+
+`reactiveTimer()` is a reactive expression that has a dependency on a hidden input: the current time.
+
+The following code uses an interval of 500ms so that the plot will update twice a second.
+
+```{r}
+server <- function(input, output, session) {
+  timer <- reactiveTimer(500)
+  
+  x1 <- reactive({
+    timer()
+    rpois(input$n, input$lambda1)
+  })
+  
+    x2 <- reactive({
+    timer()
+    rpois(input$n, input$lambda2)
+  })
+    
+    output$hist <- renderPlot({
+      freqpoly(x1(), x2(), binwidth = 1, xlim = c(0, 40))
+    }, res = 96)
+}
+```
+
+![](images/clipboard-4222090763.png)
+
+We use `timer()` in the reactive expressions that compute `x1()` and `x2()` : we call it, but don't use the value. This lets `x1` and `x2` take a reactive dependency on `timer`, without worrying about exactly what value it returns.
+
+### On click
+
+It's possible to create a big backlog of work for Shiny, and while it's working on the backlog, it can't respond to any new events.
+
+We might want to require the user to opt-in to performing the expensive calculation by requiring them to click a button.
+
+```{r}
+ui <- fluidPage(
+  fluidRow(
+    column(
+      3,
+      numericInput("lambda1", label = "lambda1", value = 3),
+      numericInput("lambda2", label = "lambda2", value = 5),
+      numericInput("n", label = "n", value = 1e4, min = 0),
+      actionButton("simulate", "Simulate!")
+    ),
+    column(
+      9,
+      plotOutput("hist")
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  
+  x1 <- reactive({
+    input$simulate
+    rpois(input$n, input$lambda1)
+  })
+  
+  x2 <- reactive({
+    input$simulate
+    rpois(input$n, input$lambda2)
+  })
+  
+  output$hist <- renderPlot({
+    freqpoly(x1(), x2(), binwidth = 1, xlim = c(0, 40))
+  }, res = 96)
+}
+```
+
+![](images/clipboard-3453540013.png)
+
+This just introduces a new dependency: `x1()` and `x2()` will update when we click the simulate button, but they'll also continue to update when `lambda1`, `lambda2`, or `n` change. We want to replace the existing dependencies, not add to them.
+
+We need `eventReactive()` which has two arguments:
+
+-   the first argument specifies what to take a dependency on
+
+-   the second argument specifies what to compute
+
+This allows the app to only compute `x1()` and `x2()` when `simulate` is clicked :
+
+```{r}
+server <- function(input, output, session) {
+  x1 <- eventReactive(input$simulate, {
+    rpois(input$n, input$lambda1)
+  })
+  x2 <- eventReactive(input$simulate, {
+    rpois(input$n, input$lambda2)
+  })
+  
+  output$hist <- renderPlot({
+    freqpoly(x1(), x2(), binwidth = 1, xlim = c(0, 40))
+  }, res = 96)
+}
+```
+
+![](images/clipboard-496785792.png)
+
+## 3.6 Observers
+
+Sometimes you need to reach outside of the app and cause side-effects to happen elsewhere in the world :
+
+-   saving a file to a shared network drive
+
+-   sending data to a web API
+
+-   updating a database
+
+-   printing a debugging message to the console
+
+`observeEvent()` is very similar to `eventReactive()`, it has two important arguments:
+
+-   `eventExpr` : input or expression to take a dependency on
+
+-   `handlerExpr` : the code that will be run
+
+The following modification to `server()` means that every time that `name` is updated, a message will be sent to the console :
+
+```{r}
+ui <- fluidPage(
+  textInput("name", "What's your name?"),
+  textOutput("greeting")
+)
+
+server <- function(input, output, session) {
+  string <- reactive(paste0("Hello ", input$name, "!"))
+  
+  output$greeting <- renderText(string())
+  
+  observeEvent(input$name, {
+    message("Greeting performed")
+  })
+}
+```
+
+Two important differences between `observeEvent()` and `eventReactive()` :
+
+-   you don't assign the result of `observeEvent()` to a variable, so
+
+-   you can't refer to it from other reactive consumers
+
+Observers and outputs are closely related. You can think of outputs as having a special side-effect: updating the HTML in the user's browser. To emphasise this closenedd, we'll draw them the same way in the reactive graph:
+
+![](images/clipboard-3291809784.png)
